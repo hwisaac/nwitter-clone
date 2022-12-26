@@ -1287,4 +1287,179 @@ setUserObj(Object.assign({}, user));
 
 ## finishing up
 
-### cleaning js
+### Security on Firebase
+
+> 배포후 <br>
+> "This domain is not authorized to run this operation." 에러 메세지가 콘솔에 찍힌다.<br>
+> 특정 도메인에만 로그인 하도록 제약이 걸려있기 때문이다.
+
+1. `firebase 콘솔`에 접속한다.
+2. `Authentication > Settings > 승인된 도메인` 에 들어간다
+   ![](readMeImages/2022-12-27-04-03-57.png)
+3. `도메인 추가 버튼`을 누르고 도메인을 추가해준다.
+4. 이제부터 로그인할 수 있다.
+
+### Security Rule [[문서]](https://firebase.google.com/docs/rules?authuser=0&hl=ko)
+
+> firestore 에서 rules 들이 있다. <br>
+> 사람들이 가능/불가능한 동작에 대한 설정이 있다.
+> ![](readMeImages/2022-12-27-04-08-35.png)
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if
+          request.time < timestamp.date(2023, 1, 25);
+    }
+  }
+}
+```
+
+- `match /databases/{database}/documents {`
+  - firestore 클라우드 서비스에 대해서, 아무 database 나 document 들을
+- `match /{document=**} {`
+  - 모든 document 까지
+- `allow read, write: if`
+  - read와 write 를 허용해준다
+- `request.time < timestamp.date(2023, 1, 25);`
+  - 해당 날짜까지
+
+#### [Security rules language](https://firebase.google.com/docs/rules/rules-language?hl=en&authuser=0)
+
+```javascript
+// 기본 구조
+service <<name>> {
+  // Match the resource path.
+  match <<path>> {
+    // Allow the request if the following conditions are true.
+    allow <<methods>> : if <<condition>>
+  }
+}
+```
+
+| Request                                                                                                                                                                                                                                                                    | Path                                              | Rule                                                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| `allow` 문에서 호출된 메서드입니다. 실행을 허용하는 메소드입니다. 표준적인 방법은 `get`, `list`, `create`, `update` 및 `delete`입니다. `read` 및 `write` convenience 메소드를 사용하면 지정된 데이터베이스 또는 저장소 경로에서 광범위한 읽기 및 쓰기 액세스가 가능합니다. | `URI` 경로로 표현된 데이터베이스 또는 저장소 위치 | `true`일 때, 요청을 허용도록 하는 조건문 `allow` 문입니다. |
+
+```javascript
+// Allow 예시
+service firebase.storage {
+  // 요청자에게 사용자 디렉토리 아래 경로의 리소스를 읽거나 삭제하도록 허용
+  match /users/{userId}/{anyUserFile=**} {
+    allow read, delete: if request.auth != null && request.auth.uid == userId;
+  }
+
+  // 요청자가 자신의 이미지를 만들거나 업데이트할 수 있습니다.
+  // When 'request.method' == 'delete' this rule and the one matching
+  // any path under the user directory would both match and the `delete`
+  // would be permitted.
+
+  match /users/{userId}/images/{imageId} {
+    // Whether to permit the request depends on the logical OR of all
+    // matched rules. This means that even if this rule did not explicitly
+    // allow the 'delete' the earlier rule would have.
+    allow write: if request.auth != null && request.auth.uid == userId && imageId.matches('*.png');
+  }
+}
+```
+
+#### Convenience methods
+
+| method | type of request           |
+| ------ | ------------------------- |
+| read   | Any type of read request  |
+| write  | Any type of write request |
+
+#### Standard methods
+
+| method | type of request                                              |
+| ------ | ------------------------------------------------------------ |
+| get    | Read requests for single documents or files                  |
+| list   | Read requests for queries and collections                    |
+| create | Write new documents or files                                 |
+| update | Write to existing database documents or update file metadata |
+| delete | Delete data                                                  |
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
+
+- 이렇게 수정하면 `request.auth != null` 로그인 한 사람만 read,write 하도록 허용하는 것을 의미한다.
+
+> match 에 {userId} 같은 것을 넣어 특정 아이디를 넣을 경고 그 아이디만 접근하도록 할 수도 있다.
+
+- `match /users/{userId}/images/{imageId}` 는 오직 이 user만 볼 수 있는데 users 콜렉션과 images 와 imageId 까지 받아올수 있다는 것
+
+```javascript
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // True if the user is signed in or the requested data is 'public'
+    function signedInOrPublic() {
+      return request.auth.uid != null || resource.data.visibility == 'public';
+    }
+
+    match /cities/{city} {
+      allow read, write: if signedInOrPublic();
+    }
+
+    match /users/{user} {
+      allow read, write: if signedInOrPublic();
+    }
+  }
+}
+```
+
+- 정의된 함수 `signedInorPublic()` 가 `true` 일 때 `read`, `write` 를 허용한다
+
+```javascript
+// documnets/admins 에서 아이디가 있는지 검색해서 결과를 리턴
+function isAdmin(userId) {
+  return exists(/databases/$(database)/documents/admins/$(userId));
+}
+// Author 또는 Admin 일 경우
+function isAuthorOrAdmin(userId, article) {
+  let isAuthor = article.author == userId;
+  // `||` is short-circuiting; isAdmin called only if isAuthor == false.
+  return isAuthor || isAdmin(userId);
+}
+```
+
+### storage 에도 보안을 설정할 수 있다.
+
+- Stroage > Rules 에서 설정한다
+- 예시- 로그인한 유저만 파일을 업로드 하도록 허용
+
+### API key security
+
+> [console.developers.google.com/apis/credentails](https://console.cloud.google.com/apis/credentails?pli=1)
+
+1. 위의 주소로 가서 자신의 프로젝트를 선택한다.
+   ![](readMeImages/2022-12-27-04-43-36.png)
+2. `Credentials` 사용자 인증 정보 페이지로 이동한다.
+3. API 키에 Firebase 에서 자동 생성된 api 키가 들어있다.
+4. `Browser key` 브라우저 키를 눌러서 사람들이 사용하게 할지등 보안을 설정할 수 있다.
+5. `HTTP 리퍼러` 를 선택하면 `New item` 으로 도메인 주소를 추가할 수 있다.
+   ![](readMeImages/2022-12-27-05-00-00.png)
+6. 이로써 특정 URL 에서만 API 키를 사용할 수 있다!
+   > 주의! firebase URL 도 추가해줘야 한다 (로그인 과정을 핸들링 하기 때문)
+
+- `콘솔 > Authorization > Templates` 에서 `firebaseapp.com` 이 붙은 url 을 찾을 수 있다.
+
+#### OAuth 2.0 Client Ids 의 Web client 키
+
+![](readMeImages/2022-12-27-04-55-46.png)
+
+## firebase 의 Clound Function
+
+- 커스텀한 백엔드 코드를 실행시켜준다
+- 자신만의 코드를 실행시키고 싶을 때, function 을 작성하고 백엔드 단에서 실행시킬 수 있다.
+- function 을 이용해서 DB 를 수정할 수도 있다.
