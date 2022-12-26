@@ -890,3 +890,401 @@ export default Nweet;
 ## File Upload
 
 ### Preview Images
+
+1. firebase 콘솔에서 `Storage` 선택 하고 시작하기 버튼을 누른다.
+2. `테스트 모드`
+3. `Cloud Storage 위치` 설정
+4. 기본 `bucket` 이 설정된다. (`bucket` 은 파일들이 담기는 곳이다)
+
+- 이미지 파일을 올리면, 프리뷰를 보여주자
+
+```javascript
+// routes/Home.js
+const [attachment, setAttachment] = useState();
+// 파일 올릴때 핸들러
+const onFileChange = (event) => {
+  const {
+    target: { files },
+  } = event;
+  const theFile = files[0];
+  const reader = new FileReader();
+  reader.onloadend = (finishedEvent) => {
+    // 파일 업로드 완료되면
+    const {
+      currentTarget: { result },
+    } = finishedEvent;
+    setAttachment(result); // attachment 에 담아준다
+  };
+  reader.readAsDataURL(theFile);
+};
+const onClearAttachment = () => setAttachment(null);
+
+// return (
+<form onSubmit={onSubmit}>
+  // accept='image/*' 하면 이미지만 올릴수 있다
+  <input type='file' accept='image/*' onChange={onFileChange} />
+  // 프리뷰
+  {attachment && (
+    <div>
+      <img src={attachment} width='50px' height='50px' />
+      <button onClick={onClearAttachment}>Clear Photo</button>
+    </div>
+  )}
+</form>;
+```
+
+### Uploading
+
+1. 사진이 있으면, 우선 사진을 업로드 하고
+2. 사진의 URL 을 받아서 nweet 에 넣고
+3. 그렇게 만들어진 nweet 를 DB 에 업로드한다
+
+#### storage 를 추가하기
+
+```javascript
+// fbase.js
+import "firebase/storage";
+
+export const storageService = firebase.storage();
+```
+
+#### ref 추가하기
+
+> - reference 는 구글 클라우드 스토리지 오브젝트에 대한 참조를 의미한다.
+> - [[문서]](https://firebase.google.com/docs/reference/js/v8/firebase.storage.Reference?hl=ko&authuser=0)
+>   Developers can upload, download, and delete objects, as well as get/set object metadata.
+
+##### Property & Methods for ref
+
+| Properties                | Methods                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `bucket : string`         | `child ( path :  string ) : Reference`                                                                  |
+| `fullPath: string`        | `delete ( ) : Promise < void >`                                                                         |
+| `name: string`            | `getDownloadURL ( ) : Promise < string >`                                                               |
+| `parent: Reference\|null` | `getMetadata ( ) : Promise < FullMetadata >`                                                            |
+| `root: Reference`         | `list ( options ? :  ListOptions ) : Promise < ListResult >`                                            |
+| `Storage`                 | `listAll ( ) : Promise < ListResult >`                                                                  |
+|                           | `put ( data :  Blob \| Uint8Array \| ArrayBuffer ,  metadata ? :  UploadMetadata ) : UploadTask`        |
+|                           | `putString ( data :  string ,  format ? :  StringFormat ,  metadata ? :  UploadMetadata ) : UploadTask` |
+|                           | `updateMetadata ( metadata :  SettableMetadata ) : Promise < FullMetadata >`                            |
+
+```javascript
+// routes/Home.js
+import { v4 as uuidv4 } from "uuid";
+import { dbService, storageService } from "fbase";
+
+const Home = ({ userObj }) => {
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    // ref 의 child에 이미지의 path 를 넣는다. ([유저이름폴더]/[랜덤이름])
+    const fileRef = storageService.ref().child(`${userObj.uid}/${uuidv4()}`);
+    // putString 메소드로 DB에 보낸다 (이미 base64로 string으로 전환했음)
+    const response = await fileRef.putString(attachment, "data_url");
+    console.log(response); // 성공 실패 여부에 대한 UploadTask 오브젝트
+  };
+
+  // return (
+  <form onSubmit={onSubmit}>// inputs</form>;
+};
+```
+
+1. 파일에 대한 reference 를 만든다
+2. 파일 데이터를 reference 로 보낸다
+
+#### firebase.storage.Reference.getDownloadURL [[문서]](https://firebase.google.com/docs/reference/js/v8/firebase.storage.Reference?authuser=0&hl=ko#getdownloadurl)
+
+> `ref` 의 `getDownloadURL` 메소드는 이미지의 퍼블릭 url 을 제공한다. 이걸 사용해서 이미지 소스를 활용할 수 있다.<br> > `getDownloadURL ( ) : Promise < string >`
+
+```javascript
+// routes/Home.js
+const Home = ({ userObj }) => {
+  const [nweet, setNweet] = useState("");
+  const [nweets, setNweets] = useState([]);
+  const [attachment, setAttachment] = useState();
+
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    let attachmentUrl = "";
+    if (attachment != "") {
+      const attachmentRef = storageService
+        .ref()
+        .child(`${userObj.uid}/${uuidv4()}`);
+      const response = await attachmentRef.putString(attachment, "data_url");
+      attachmentUrl = await response.ref.getDownloadURL(); // url string이 저장
+    }
+    const nweetObj = {
+      text: nweet,
+      createdAt: Date.now(),
+      creatorId: userObj.uid,
+      attachmentUrl, // nweet 은 이제 이미지 url 도 갖게됐다!
+    };
+    await dbService.collection("nweets").add(nweetObj); // 이 객체를 db에 업로드
+    setNweet("");
+    setAttachment("");
+  };
+
+```
+
+### Deleting files
+
+> `firebase.storage.Reference.delete()` [[문서]](https://firebase.google.com/docs/reference/js/v8/firebase.storage.Reference?authuser=0&hl=ko#delete)<br> > `delete ( ) : Promise < void >`
+> 래퍼런스 location 에 있는 객체를 삭제한다
+
+#### 이미지를 생성할때 uuid 로 임의의 이름으로 만들었다. 이것을 어떻게 추적할까? <br>
+
+> `firebase.storage.Storage.refFromURL` 메소드를 사용한다. [[문서]](https://firebase.google.com/docs/reference/js/v8/firebase.storage.Storage?authuser=0&hl=ko#reffromurl)<br> > `refFromURL ( url :  string ) : Reference`
+>
+> - `url`의 폼은 `gs://bucket/files/image.png` 혹은 metadata 오브젝트로부터 얻은 download URL 이다
+> - url 을 전달해주는 것만으로 reference 를 얻을 수 있고 이걸로 CRUD할수 있다.
+
+```javascript
+// components/Nweet.js
+import { dbService, storageService } from "fbase";
+
+const onDeleteClick = async () => {
+  const ok = window.confirm("Are you sure you want to delete this nweet?");
+  if (ok) {
+    await dbService.doc(`nweets/${nweetObj.id}`).delete();
+    await storageService.refFromURL(nweetObj.attachmentUrl).delete();
+  }
+};
+```
+
+## Edit Profile
+
+### get my own Nweets
+
+> 데이터 필터링은 `where` 메소드를 이용한다 [[문서]](https://firebase.google.com/docs/reference/js/v8/firebase.firestore.CollectionReference?authuser=0&hl=ko#where)<br> > `where ( fieldPath :  string | FieldPath ,  opStr :  WhereFilterOp ,  value :  any ) : Query < T >` > `opStr` 예시 - (e.g "<", "<=", "==", ">", ">=").
+
+```javascript
+// src/routes/Profile.js
+export default ({ userObj }) => {
+  const getMyNweets = async () => {
+    const nweets = await dbService
+      .collection("nweets")
+      .where("creatorId", "==", userObj.uid) // creatorId 와 userObj.uid가 같은 걸 필터링
+      .orderBy("createdAt") // 사실 이 코드가 에러를 발생시킨다.
+      .get();
+    console.log(nweets.docs.map((doc) => doc.data()));
+  };
+
+  useEffect(() => {
+    getMyNweets();
+  }, []);
+
+```
+
+- 발생하는 에러
+- `Uncaught (in promise) FirebaseError: the query requires an index. You can create it here: https://console.firebase.google.com/v1/r블라블라`
+- where 로 필터링을 해서 리턴 한 것을 정렬하라고 하고 있다.
+- 그러나, noSQL 기반 DB라서 이런 기능은 작동되지 않는다.
+
+-해결하기
+
+1. 쿼리에 index 가 필요한데 pre-made query 를 만들면 (해당 쿼리를 사용할거라고 데이터베이스에 알려줘야 한다)데이터베이스가 쿼리를 만들 준비를 할 수 있다.
+2. 해당 링크를 클릭한다
+   ![](readMeImages/2022-12-27-01-33-51.png)
+3. 색인만들기를 눌러준다.
+4. 이걸로 쿼리를 실행할 수 있도록 index를 생성했다.
+
+- 만일 `orderBy("createdAt", "desc" )` 으로 내림차순으로 정렬하라는 코드로 수정을 하면 다시 에러가 발생해서 인덱스를 생성하라고 한다.
+- 왜냐면 오름차순, 내림차순을 바꾸면 인덱싱을 다시 해야되기 때문 (또 생성하면 됨)
+
+### update profile
+
+- 이름을 display 해보자
+
+> firebase.User 모듈 [[문서]](https://firebase.google.com/docs/reference/js/v8/firebase.User?authuser=0&hl=ko)<br>
+> 유저 계정에 관한 프로퍼티와 메소드를 제공한다.
+
+| Properties                     | Methods                                                                                                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `displayName: string \| null`  | `delete ( ) : Promise < void >`                                                                                                          |
+| `email: string \| null`        | `getIdToken ( forceRefresh ? :  boolean ) : Promise < string >`                                                                          |
+| `emailVerified: boolean`       | `getIdTokenResult ( forceRefresh ? :  boolean ) : Promise < IdTokenResult >`                                                             |
+| `isAnonymous: boolean`         | `linkAndRetrieveDataWithCredential ( credential :  AuthCredential ) : Promise < UserCredential >`                                        |
+| `metadata: UserMetadata`       | `linkWithCredential ( credential :  AuthCredential ) : Promise < UserCredential >`                                                       |
+| `multiFactor: MultiFactorUser` | `linkWithPhoneNumber ( phoneNumber :  string ,  applicationVerifier :  ApplicationVerifier ) : Promise < ConfirmationResult >`           |
+| `phoneNumber: string \| null`  | `linkWithPopup ( provider :  AuthProvider ) : Promise < UserCredential >`                                                                |
+| `photoURL: string \| null`     | `linkWithRedirect ( provider :  AuthProvider ) : Promise < void >`                                                                       |
+| `providerId: string`           | `reauthenticateAndRetrieveDataWithCredential ( credential :  AuthCredential ) : Promise < UserCredential >`                              |
+| `refreshToken: string`         | `reauthenticateWithCredential ( credential :  AuthCredential ) : Promise < UserCredential >`                                             |
+| `tenantId: string \| null`     | `reauthenticateWithPhoneNumber ( phoneNumber :  string ,  applicationVerifier :  ApplicationVerifier ) : Promise < ConfirmationResult >` |
+| `uid: string`                  | `reauthenticateWithPopup ( provider :  AuthProvider ) : Promise < UserCredential >`                                                      |
+|                                | `reauthenticateWithRedirect ( provider :  AuthProvider ) : Promise < void >`                                                             |
+|                                | `reload ( ) : Promise < void >`                                                                                                          |
+|                                | `sendEmailVerification ( actionCodeSettings ? :  ActionCodeSettings \| null ) : Promise < void >`                                        |
+|                                | `toJSON ( ) : Object`                                                                                                                    |
+|                                | `unlink ( providerId :  string ) : Promise < User >`                                                                                     |
+|                                | `updateEmail ( newEmail :  string ) : Promise < void >`                                                                                  |
+|                                | `updatePassword ( newPassword :  string ) : Promise < void >`                                                                            |
+|                                | `updatePhoneNumber ( phoneCredential :  AuthCredential ) : Promise < void >`                                                             |
+|                                | `updateProfile ( profile :  { displayName ?: string \| null ; photoURL ?: string \| null } ) : Promise < void >`                         |
+|                                | `verifyBeforeUpdateEmail ( newEmail :  string ,  actionCodeSettings ? :  ActionCodeSettings \| null ) : Promise < void >`                |
+
+> 여기서 `User.updateProfile(prifle)` 을 사용해서 프로필을 업데이트 한다
+
+```javascript
+//사용예시
+// Updates the user attributes:
+user
+  .updateProfile({
+    displayName: "Jane Q. User",
+    photoURL: "https://example.com/jane-q-user/profile.jpg",
+  })
+  .then(
+    function () {
+      // Profile updated successfully!
+      // "Jane Q. User"
+      var displayName = user.displayName;
+      // "https://example.com/jane-q-user/profile.jpg"
+      var photoURL = user.photoURL;
+    },
+    function (error) {
+      // An error happened.
+    }
+  );
+
+// Passing a null value will delete the current attribute's value, but not
+// passing a property won't change the current attribute's value:
+// Let's say we're using the same user than before, after the update.
+user.updateProfile({ photoURL: null }).then(
+  function () {
+    // Profile updated successfully!
+    // "Jane Q. User", hasn't changed.
+    var displayName = user.displayName;
+    // Now, this is null.
+    var photoURL = user.photoURL;
+  },
+  function (error) {
+    // An error happened.
+  }
+);
+```
+
+```javascript
+// src/routes/Profiles.js
+export default ({ userObj }) => {
+  const history = useHistory();
+  const [newDisplayName, setNewDisplayName] = useState(userObj.displayName);
+  const onChange = (event) => {
+    const {
+      target: { value },
+    } = event;
+    setNewDisplayName(value);
+  };
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    if (userObj.displayName !== newDisplayName) {
+      await userObj.updateProfile({
+        displayName: newDisplayName,
+      });
+    }
+  };
+  return (
+    <>
+      <form onSubmit={onSubmit}>
+        <input
+          onChange={onChange}
+          type='text'
+          placeholder='Display name'
+          value={newDisplayName}
+        />
+        <input type='submit' value='Update Profile' />
+      </form>
+      <button onClick={onLogOutClick}>Log Out</button>
+    </>
+  );
+};
+```
+
+> firebase.User 모듈을 사용하기 싫다면 firestore 에서 users 콜렉션을 이용해보자 <br>
+> 유저에 대해 아이디당 document 하나만 생성할 수 있는데<br>
+> users 에 관한 모든 데이터를 저장하는 것이다<br>
+
+### Update Profile Bugfix
+
+> 위에 작성된 코드는 새로고침을 해야 변경된 프로필명이 반영이 된다.
+> Update Profile 버튼을 누를 때 바뀌게 하려면 어떻게 해야 할까
+
+- userObj 를 여기저기서 사용한 이유는 뭘까
+  - `uid` 를 사용하기 위해서? -> `authService.currentUser.uid` 쓰면 됨
+  - `userObj` 는 `App.js` 에서 시작해서 다른 컴포넌트들로 뿌려진다. `userObj` 상태의 변화가 생기면 관련된 컴포넌트들이 다시 랜더링 된다
+  - `userObj.updateProfile({})` 로 업데이트를 하면 `firebase` 서버의 user를 새로고침 해주는데, `refreshUser` 함수로 `user` 를 업데이트 해주면 리랜더링 하게 만든다
+
+```javascript
+// components/App.js
+ useEffect(() => {
+    authService.onAuthStateChanged((user) => {
+      if (user) {
+        setUserObj({
+          displayName: user.displayName,
+          uid: user.uid,
+          updateProfile: (args) => user.updateProfile(args),
+        });
+      }
+            setInit(true);
+    });
+  }, []);
+  const refreshUser = () => { // user 업데이트를 해주는 함수
+    const user = authService.currentUser;
+    // 주의! 단순히 setUserObj(authService.currentUser) 로 하면 리랜더링이 안된다!
+    // 만약 setUserObj({displayName: "BS" }) 면 정상적으로 리랜더링된다.
+    setUserObj({
+      displayName: user.displayName,
+      uid: user.uid,
+      updateProfile: (args) => user.updateProfile(args),
+    });
+  };
+  return (
+    <>
+      {init ? (
+        <AppRouter
+          refreshUser={refreshUser} // refreshUser 를 뿌린다
+          isLoggedIn={Boolean(userObj)}
+          userObj={userObj}
+        />
+```
+
+```javascript
+// routes/Profile.js
+export default ({ refreshUser, userObj }) => {
+  const history = useHistory();
+  const [newDisplayName, setNewDisplayName] = useState(userObj.displayName);
+  const onLogOutClick = () => {
+
+  export default ({ userObj }) => {
+      await userObj.updateProfile({
+        displayName: newDisplayName,
+      });
+      refreshUser(); // 이름을 firebase에 올리고 업데이트
+    }
+  };
+```
+
+> `setUserObj(authService.currentUser)` 로 하면 작동하지 않는이유
+
+- `console.log(authService.currentUser)` 를 해보면 **매우 커다란 오브젝트**인걸 알수 있다.
+- 이런 경우 react는 '과연 현재 상태가 과거의 상태와 다른가'하고 결정장애가 오기 때문에 re-render 하지 못한다.
+
+> 해결 방법
+
+1. object 크기를 줄여준다 (추천방식)
+
+```javascript
+setUserObj({
+  displayName: user.displayName,
+  uid: user.uid,
+  updateProfile: (args) => user.updateProfile(args),
+});
+```
+
+2. `Object.assign(target,source)` 을 이용한다. (비추천. 에러날수있음)
+
+```javascript
+setUserObj(Object.assign({}, user));
+```
+
+## finishing up
+
+### cleaning js
