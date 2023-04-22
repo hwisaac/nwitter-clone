@@ -1,9 +1,13 @@
 # Twitter 클론코딩 하면서 firebase 공부하기
-[배포](https://my-nwitter.netlify.app/)
+[배포](https://hwisaac.github.io/nwitter-clone/#/)
 
 ![](readMeImages/2023-04-22-22-30-01.png)
 ![](readMeImages/2023-04-22-22-30-15.png)
 ![](readMeImages/2023-04-22-22-31-05.png)
+
+## 기능
+- firebase 를 이용한 실시간 tweet 데이터 연동
+- firebase 를 이용한 회원가입과 로그인
 ## 세팅
 
 1. `src` 폴더를 싹 비워준다. ( `App.js` 와 `index.js` 만 남긴다.)
